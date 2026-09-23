@@ -20,5 +20,5 @@
 const CONFIG = {
   brand: "イコノイジョイ推し予測",
   siteUrl: "https://hollowmark-dev.github.io/eqnojo-yosoku/",
-  endpoint: ""
+  endpoint: "https://script.google.com/macros/s/AKfycbz6dLvwGeSHSbWSIoaZlw4ActV4cd1T3ioL3NgXf51LP_hIy8_Viypr3PLn19KRyoXYoA/exec"
 };

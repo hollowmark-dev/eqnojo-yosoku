@@ -465,6 +465,6 @@ global.OSHIYOHO = {
              completed: !!done };
   },
   /* the real ones, not copies -- the copy drifted once already */
-  shareText: shareText, shareUrl: shareUrl, siteUrl: siteUrl
+  shareText: shareText, shareUrl: shareUrl, siteUrl: siteUrl, send: send
 };
 })(typeof globalThis !== "undefined" ? globalThis : this);
