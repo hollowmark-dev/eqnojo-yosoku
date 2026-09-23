@@ -1,0 +1,10 @@
+# Never commit face biometrics or member photos (see README).
+*.npy
+*.npz
+landmarks.json
+ref_slugs.json
+slug_map.json
+identity_ref.json
+identity_scores.csv
+members/
+wayback/
