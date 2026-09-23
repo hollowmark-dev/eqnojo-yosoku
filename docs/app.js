@@ -172,8 +172,15 @@ function expectedDist() {           // posterior mean weighted distance
     return s;
   });
 }
+/* Ranked on D + adj, not D alone. adj is a small per-member hub correction
+ * (reeval/hub_offset.py): the face pool sits off to one side, so members
+ * near its centre topped the list whatever was clicked -- random clickers
+ * got one member in 33% of runs against a fair 9%. adj brings that to ~25%
+ * without a measurable loss for simulated users with real preferences. */
 function recommend() {
-  var D = expectedDist();
+  var D = expectedDist().map(function (v, i) {
+    return v + (MEMBERS[i].adj || 0);
+  });
   var ord = D.map(function (v, i) { return [v, i]; })
              .sort(function (a, b) { return a[0] - b[0]; })
              .map(function (x) { return x[1]; });
