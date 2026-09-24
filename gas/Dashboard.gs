@@ -4,8 +4,16 @@
  * - シートを開くたびに自動で更新する。メニュー「推し予測 → 集計を更新」でも更新できる。
  * - responses には書き込まない（読むだけ）。doPost（Code.gs）とは独立している。
  * - メンバー別の表は人気ランキングに見えるため、外部に公開しない。
+ *
+ * 区分:
+ *   旧・補正前  顔ID g000〜g094、ハブ補正の公開前（2026/09/23 19:47 より前）
+ *   旧・補正後  顔ID g000〜g094、補正の公開後
+ *   新セット    顔ID g100〜（2026/09/24 公開の66枚）
+ * 1問も選ばなかった回答（旧版で記録されたもの）は的中率から除く。
  */
 var CORRECTION_AT = '2026/09/23 19:47:08';   // ハブ補正を公開した時刻（JST）
+var PHASES = ['旧・補正前', '旧・補正後', '新セット'];
+var SHUFFLES = 300;                           // シャッフル基準の繰り返し回数
 var MEMBERS = [
   ['M19', '大谷映美里', '＝LOVE'],
   ['M14', '大場花菜', '＝LOVE'],
@@ -54,6 +62,26 @@ function fmtTs(v) {
   return v instanceof Date
     ? Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy/MM/dd HH:mm:ss') : String(v);
 }
+function phaseOf(ts, picks) {
+  if (picks.some(function (g) { return /^g1\d\d$/.test(g); })) return '新セット';
+  return ts < CORRECTION_AT ? '旧・補正前' : '旧・補正後';
+}
+function hit(P, O) { return P.some(function (m) { return O.indexOf(m) >= 0; }) ? 1 : 0; }
+
+// 推しを入力した回答だけで: 実際の的中率・偶然の的中率・シャッフル基準
+function hitStats(rs) {
+  var n = rs.length;
+  if (!n) return { n: 0, hit: '', chance: '', shuffled: '' };
+  var h = 0, e = 0;
+  rs.forEach(function (r) { h += hit(r.P, r.O); e += 1 - comb(33 - r.O.length, 3) / comb(33, 3); });
+  var props = rs.map(function (r) { return r.P; }), sum = 0;
+  for (var s = 0; s < SHUFFLES; s++) {
+    var p = props.slice();
+    for (var i = p.length - 1; i > 0; i--) { var j = Math.floor(Math.random() * (i + 1)); var t = p[i]; p[i] = p[j]; p[j] = t; }
+    rs.forEach(function (r, i) { sum += hit(p[i], r.O); });
+  }
+  return { n: n, hit: h / n, chance: e / n, shuffled: sum / SHUFFLES / n };
+}
 
 function updateDashboard() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -63,77 +91,76 @@ function updateDashboard() {
   sh.getCharts().forEach(function (c) { sh.removeChart(c); });
   sh.clear();
 
-  var ph = { '補正前': { n: 0, o: 0, hit: 0, exp: 0 }, '補正後': { n: 0, o: 0, hit: 0, exp: 0 } };
-  var day = {}, prop = {}, oshi = {}, done = 0;
+  var by = {}, day = {}, oshiAll = {}, skipped = 0;
+  PHASES.forEach(function (p) { by[p] = { rows: [], withO: [], prop: {} }; });
   rows.forEach(function (r) {
     var ts = fmtTs(r[0]); if (!ts) return;
-    var P = toks(r[3]), O = toks(r[2]), k = O.length;
-    var p = ph[ts < CORRECTION_AT ? '補正前' : '補正後'];
-    p.n++; if (Number(r[4]) === 1) done++;
+    var picks = toks(r[1]).filter(function (g) { return g; }), O = toks(r[2]), P = toks(r[3]);
     var d = ts.slice(0, 10); day[d] = (day[d] || 0) + 1;
-    P.forEach(function (m) { prop[m] = (prop[m] || 0) + 1; });
-    O.forEach(function (m) { oshi[m] = (oshi[m] || 0) + 1; });
-    if (k) {
-      p.o++;
-      if (P.some(function (m) { return O.indexOf(m) >= 0; })) p.hit++;
-      p.exp += 1 - comb(33 - k, 3) / comb(33, 3);
-    }
+    if (!picks.length) { skipped++; return; }
+    var b = by[phaseOf(ts, picks)];
+    b.rows.push(1);
+    P.forEach(function (m) { b.prop[m] = (b.prop[m] || 0) + 1; });
+    O.forEach(function (m) { oshiAll[m] = (oshiAll[m] || 0) + 1; });
+    if (O.length) b.withO.push({ P: P, O: O });
   });
-  var all = { n: ph['補正前'].n + ph['補正後'].n, o: ph['補正前'].o + ph['補正後'].o,
-              hit: ph['補正前'].hit + ph['補正後'].hit, exp: ph['補正前'].exp + ph['補正後'].exp };
-  var pct = function (a, b) { return b ? a / b : ''; };
+  var st = {}; PHASES.forEach(function (p) { st[p] = hitStats(by[p].withO); });
 
   sh.getRange('A1').setValue('イコノイジョイ推し予測 集計（非公開・外に出さない）').setFontWeight('bold').setFontSize(14);
   sh.getRange('A2').setValue('更新: ' + Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy/MM/dd HH:mm'));
 
   // 概要
-  var sum = [['', '全体', '補正前', '補正後'],
-    ['回答数', all.n, ph['補正前'].n, ph['補正後'].n],
-    ['推しの入力あり', all.o, ph['補正前'].o, ph['補正後'].o],
-    ['推しが3人に入った回答', all.hit, ph['補正前'].hit, ph['補正後'].hit],
-    ['偶然でも入る見込み（件）', all.exp, ph['補正前'].exp, ph['補正後'].exp],
-    ['的中率', pct(all.hit, all.o), pct(ph['補正前'].hit, ph['補正前'].o), pct(ph['補正後'].hit, ph['補正後'].o)],
-    ['偶然の的中率', pct(all.exp, all.o), pct(ph['補正前'].exp, ph['補正前'].o), pct(ph['補正後'].exp, ph['補正後'].o)]];
+  var sum = [[''].concat(PHASES),
+    ['回答数（1問以上回答）'].concat(PHASES.map(function (p) { return by[p].rows.length; })),
+    ['推しの入力あり'].concat(PHASES.map(function (p) { return st[p].n; })),
+    ['的中率（推しが提案3人に入った割合）'].concat(PHASES.map(function (p) { return st[p].hit; })),
+    ['シャッフル基準（他人の提案と組み替えた場合）'].concat(PHASES.map(function (p) { return st[p].shuffled; })),
+    ['偶然の的中率（でたらめに3人選んだ場合）'].concat(PHASES.map(function (p) { return st[p].chance; }))];
   sh.getRange(4, 1, sum.length, 4).setValues(sum);
   sh.getRange(4, 1, 1, 4).setFontWeight('bold');
-  sh.getRange(8, 2, 1, 3).setNumberFormat('0.0');
-  sh.getRange(9, 2, 2, 3).setNumberFormat('0%');
-  sh.getRange('A11').setValue('完走数: ' + done + ' ／ 的中率が「偶然の的中率」を上回り続ければ、好みを予測できている。100件以上たまるまでは判断しない。');
+  sh.getRange(7, 2, 3, 3).setNumberFormat('0%');
+  sh.getRange('A11').setValue('全問スキップ（旧版で記録、集計から除外）: ' + skipped + ' 件');
+  sh.getRange('A12').setValue('的中率が「シャッフル基準」を上回っていれば、人気や偏りでは説明できない分だけ好みを読めている。区分ごとに100件以上を目安に判断する。');
 
-  // 的中率 vs 偶然（グラフ用）
-  var hv = [['', '実際', '偶然']];
-  ['全体', '補正後'].forEach(function (k) {
-    var p = k === '全体' ? all : ph[k];
-    hv.push([k, p.o ? p.hit / p.o : 0, p.o ? p.exp / p.o : 0]);
-  });
-  sh.getRange(13, 1, hv.length, 3).setValues(hv);
-  sh.getRange(14, 2, 2, 2).setNumberFormat('0%');
+  // 的中率の比較（グラフ用）
+  var hv = [['', '的中率', 'シャッフル基準', '偶然']].concat(PHASES.map(function (p) {
+    return [p + '（n=' + st[p].n + '）', st[p].hit || 0, st[p].shuffled || 0, st[p].chance || 0];
+  }));
+  sh.getRange(14, 1, hv.length, 4).setValues(hv);
+  sh.getRange(15, 2, 3, 3).setNumberFormat('0%');
 
   // 日別
   var days = Object.keys(day).sort();
   var dv = [['日付', '回答数']].concat(days.map(function (d) { return [d, day[d]]; }));
-  sh.getRange(18, 1, dv.length, 2).setValues(dv);
+  sh.getRange(20, 1, dv.length, 2).setValues(dv);
 
-  // メンバー別（ロースター順）
-  var mv = [['メンバー', '提案された回数', '推しに選ばれた回数']].concat(MEMBERS.map(function (m) {
-    return [m[1] + '（' + m[2] + '）', prop[m[0]] || 0, oshi[m[0]] || 0];
-  }));
-  var mr = 18 + dv.length + 2;
-  sh.getRange(mr, 1, mv.length, 3).setValues(mv);
-  [4, 13, 18, mr].forEach(function (r) { sh.getRange(r, 1, 1, 4).setFontWeight('bold'); });
-  sh.setColumnWidth(1, 230);
+  // メンバー別：各区分で提案3人に入った割合（その区分の回答数に対する%）と、推しに選ばれた回数
+  var nOld = by['旧・補正後'].rows.length, nNew = by['新セット'].rows.length;
+  var mv = [['メンバー', '提案に入った割合（旧・補正後）', '提案に入った割合（新セット）', '推しに選ばれた回数（全体）']]
+    .concat(MEMBERS.map(function (m) {
+      return [m[1] + '（' + m[2] + '）',
+              nOld ? (by['旧・補正後'].prop[m[0]] || 0) / nOld : 0,
+              nNew ? (by['新セット'].prop[m[0]] || 0) / nNew : 0,
+              oshiAll[m[0]] || 0];
+    }));
+  var mr = 20 + dv.length + 2;
+  sh.getRange(mr, 1, mv.length, 4).setValues(mv);
+  sh.getRange(mr + 1, 2, mv.length - 1, 2).setNumberFormat('0%');
+  [4, 14, 20, mr].forEach(function (r) { sh.getRange(r, 1, 1, 4).setFontWeight('bold'); });
+  sh.setColumnWidth(1, 300);
 
   // グラフ
   sh.insertChart(sh.newChart().setChartType(Charts.ChartType.COLUMN)
-    .addRange(sh.getRange(13, 1, hv.length, 3)).setPosition(4, 6, 0, 0)
-    .setOption('title', '的中率（推しが提案3人に入った割合） 実際 vs 偶然')
-    .setOption('vAxis', { format: 'percent', minValue: 0 }).setOption('width', 520).setOption('height', 300).build());
+    .addRange(sh.getRange(14, 1, hv.length, 4)).setPosition(4, 6, 0, 0)
+    .setOption('title', '的中率：実際 vs シャッフル基準 vs 偶然（区分別）')
+    .setOption('vAxis', { format: 'percent', minValue: 0 }).setOption('width', 600).setOption('height', 320).build());
   sh.insertChart(sh.newChart().setChartType(Charts.ChartType.COLUMN)
-    .addRange(sh.getRange(18, 1, dv.length, 2)).setPosition(20, 6, 0, 0)
+    .addRange(sh.getRange(20, 1, dv.length, 2)).setPosition(22, 6, 0, 0)
     .setOption('title', '日別の回答数').setOption('legend', { position: 'none' })
-    .setOption('width', 520).setOption('height', 260).build());
+    .setOption('width', 600).setOption('height', 260).build());
   sh.insertChart(sh.newChart().setChartType(Charts.ChartType.BAR)
-    .addRange(sh.getRange(mr, 1, mv.length, 3)).setPosition(35, 6, 0, 0)
-    .setOption('title', 'メンバー別：提案された回数と推しに選ばれた回数')
-    .setOption('width', 620).setOption('height', 820).build());
+    .addRange(sh.getRange(mr, 1, mv.length, 3)).setPosition(37, 6, 0, 0)
+    .setOption('title', 'メンバー別：提案3人に入った割合（旧・補正後 vs 新セット）')
+    .setOption('hAxis', { format: 'percent', minValue: 0 })
+    .setOption('width', 660).setOption('height', 860).build());
 }
