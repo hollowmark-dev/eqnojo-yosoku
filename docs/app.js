@@ -228,7 +228,7 @@ function gname(g) { return (GROUP_LABEL && GROUP_LABEL[g]) || g; }
 /* ---------- view ---------- */
 function $(id) { return document.getElementById(id); }
 function show(id) {
-  ["intro", "quiz", "oshi", "result"].forEach(function (s) {
+  ["intro", "quiz", "oshi", "result", "none"].forEach(function (s) {
     $(s).classList.toggle("hide", s !== id);
   });
   window.scrollTo(0, 0);
@@ -259,7 +259,13 @@ function renderDisclaimer() {
   });
 }
 function nextQ() {
-  if (qi >= NQ) { toOshi(); return; }
+  if (qi >= NQ) {
+    /* Every question skipped: the posterior is still the prior, so any
+     * "result" would be the same three people for everyone. Say so
+     * instead, and log nothing. */
+    if (!answers.some(function (a) { return a.chosen; })) { show("none"); return; }
+    toOshi(); return;
+  }
   var idx = pickQuad();
   lastQuad = idx;
   $("qnum").textContent = "第 " + (qi + 1) + " 問 / " + NQ;
@@ -363,6 +369,14 @@ function finish() {
     host.appendChild(d);
   });
   drawMap(top3, r.dist);
+  shareBlob = null;
+  var sv = $("saveimg");
+  if (sv) sv.classList.add("hide");
+  makeShareImage(function (b) {
+    shareBlob = b;
+    // where the share sheet cannot carry the image, offer it as a download
+    if (sv && b && !canShareImage()) sv.classList.remove("hide");
+  });
   $("foot").textContent = DISCLAIMER_INTRO;
   send(true);
 }
@@ -404,7 +418,66 @@ function drawMap(idx, D) {
   c.textContent = "あなたの好み";
   svg.appendChild(c);
 }
+/* ---------- share image ----------
+ * The result screen redrawn on a canvas (names and groups only -- never a
+ * photo), made when the result appears so share() can hand it over inside
+ * the tap: iOS refuses navigator.share once the gesture has gone async. */
+var shareBlob = null;
+var FONT = '"Hiragino Kaku Gothic ProN","Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif';
+function rrect(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x + r, y);
+  c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function makeShareImage(done) {
+  var cv = document.createElement("canvas");
+  if (!cv.getContext) { done(null); return; }
+  cv.width = 1080; cv.height = 1080;
+  var c = cv.getContext("2d");
+  c.fillStyle = "#faf9f7"; c.fillRect(0, 0, 1080, 1080);
+  c.fillStyle = "#c2506a"; c.fillRect(0, 0, 1080, 16);
+  c.textAlign = "center"; c.textBaseline = "alphabetic";
+  c.fillStyle = "#1b1b1b"; c.font = "700 64px " + FONT;
+  c.fillText(CONFIG.brand || "推し予測", 540, 130);
+  c.fillStyle = "#6b6a67"; c.font = "400 38px " + FONT;
+  c.fillText("好みの傾向が近い3人", 540, 200);
+  top3.forEach(function (i, k) {
+    var m = MEMBERS[i], y = 250 + k * 225;
+    c.fillStyle = "#ffffff"; rrect(c, 90, y, 900, 195, 28); c.fill();
+    c.strokeStyle = "#e2e0dc"; c.lineWidth = 3; c.stroke();
+    c.textAlign = "left";
+    c.fillStyle = "#c2506a"; c.font = "700 30px " + FONT; c.fillText(LEAD[k], 140, y + 58);
+    c.fillStyle = "#1b1b1b"; c.font = "700 60px " + FONT; c.fillText(m.name, 140, y + 128);
+    c.fillStyle = "#6b6a67"; c.font = "400 32px " + FONT; c.fillText(gname(m.group), 140, y + 172);
+  });
+  c.textAlign = "center"; c.fillStyle = "#6b6a67"; c.font = "400 27px " + FONT;
+  c.fillText("実在しない顔を見比べて、" + GROUP_ORDER.map(gname).join("・") + " のメンバーから診断", 540, 978);
+  c.fillText(siteUrl().replace(/^https?:\/\//, "").replace(/\/$/, ""), 540, 1024);
+  if (cv.toBlob) cv.toBlob(function (b) { done(b); }, "image/png"); else done(null);
+}
+function shareFile() {
+  if (!shareBlob || typeof File === "undefined") return null;
+  return new File([shareBlob], "eqnojo-yosoku.png", { type: "image/png" });
+}
+function canShareImage() {
+  var f = shareFile();
+  return !!(f && navigator.canShare && navigator.canShare({ files: [f] }));
+}
+function saveImage() {
+  if (!shareBlob) return;
+  var a = document.createElement("a");
+  a.href = URL.createObjectURL(shareBlob); a.download = "eqnojo-yosoku.png";
+  document.body.appendChild(a); a.click(); a.remove();
+}
 function share() {
+  /* Phones: the share sheet with the image attached (pick X there).
+   * Attaching an image means X shows the picture instead of the link card,
+   * so the URL goes in the text. Elsewhere: the plain X intent as before. */
+  if (canShareImage()) {
+    navigator.share({ files: [shareFile()],
+                      text: shareText() + "\n" + siteUrl() }).catch(function () {});
+    return;
+  }
   /* First person, about my own impression. Never a ranking of members:
    * no "1位", no "トップ", no ordinal of any kind.
    *
@@ -448,6 +521,8 @@ function boot() {
   $("odone").onclick = finish;   // works at zero selections too
   $("share").onclick = share;
   $("again").onclick = restart;
+  $("again2").onclick = restart;
+  $("saveimg").onclick = saveImage;
 }
 if (typeof document !== "undefined" && document.getElementById) {
   if (document.readyState === "loading")
