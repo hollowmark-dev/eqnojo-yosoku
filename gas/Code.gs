@@ -15,7 +15,8 @@
  */
 
 var SHEET_NAME = 'responses';
-var HEADERS = ['timestamp', 'picks', 'oshi', 'proposed', 'completed'];
+var HEADERS = ['timestamp', 'picks', 'oshi', 'proposed', 'completed',
+               'shown', 'choice'];
 var MAX_PICKS = 12;
 var MAX_OSHI = 3;
 var MAX_PROPOSED = 3;
@@ -34,7 +35,11 @@ function doPost(e) {
         body.picks.join(' '),
         body.oshi.join(' '),
         body.proposed.join(' '),
-        body.completed ? 1 : 0
+        body.completed ? 1 : 0,
+        // one entry per question, skips included, in the same order:
+        // shown = 4 face ids joined by ',', choice = position 0-3 or '-'
+        body.shown.map(function (q) { return q.join(','); }).join(' '),
+        body.choice.map(function (c) { return c < 0 ? '-' : String(c); }).join(' ')
       ]);
     }
   } catch (err) {
@@ -58,7 +63,7 @@ function ok() {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-/** Parse ONLY the five known fields, with length and shape limits. */
+/** Parse ONLY the known fields, with length and shape limits. */
 function readBody(e) {
   if (!e || !e.postData || !e.postData.contents) return null;
   var raw = e.postData.contents;
@@ -70,8 +75,11 @@ function readBody(e) {
     return null;
   }
   if (!o || typeof o !== 'object') return null;
+  var sc = cleanShown(o.shown, o.choice);
   return {
     picks: clean(o.picks, RE_FACE, MAX_PICKS),
+    shown: sc.shown,
+    choice: sc.choice,
     oshi: clean(o.oshi, RE_MEMBER, MAX_OSHI),
     proposed: clean(o.proposed, RE_MEMBER, MAX_PROPOSED),
     completed: o.completed === true
@@ -88,6 +96,26 @@ function clean(arr, re, max) {
   return out;
 }
 
+/**
+ * shown/choice only mean something together and in order, so they are
+ * kept whole or dropped whole: one malformed question empties both.
+ * Old clients send neither and get two empty cells.
+ */
+function cleanShown(shown, choice) {
+  var none = { shown: [], choice: [] };
+  if (!Array.isArray(shown) || !Array.isArray(choice)) return none;
+  if (shown.length !== choice.length || shown.length > MAX_PICKS) return none;
+  for (var i = 0; i < shown.length; i++) {
+    var q = shown[i], c = choice[i];
+    if (!Array.isArray(q) || q.length !== 4) return none;
+    for (var k = 0; k < 4; k++) {
+      if (typeof q[k] !== 'string' || !RE_FACE.test(q[k])) return none;
+    }
+    if (typeof c !== 'number' || [-1, 0, 1, 2, 3].indexOf(c) < 0) return none;
+  }
+  return { shown: shown, choice: choice };
+}
+
 function getSheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sh = ss.getSheetByName(SHEET_NAME);
@@ -95,6 +123,9 @@ function getSheet() {
     sh = ss.insertSheet(SHEET_NAME);
     sh.appendRow(HEADERS);
     sh.setFrozenRows(1);
+  } else if (sh.getRange(1, HEADERS.length).getValue() === '') {
+    // sheet made before shown/choice existed: label the new columns once
+    sh.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
   }
   return sh;
 }
@@ -106,11 +137,15 @@ function getSheet() {
 function testAppend() {
   doPost({ postData: { contents: JSON.stringify({
     picks: ['g001', 'g002', 'bad!', 'g003'],
+    shown: [['g001', 'g010', 'g020', 'g030'], ['g002', 'g011', 'g021', 'g031'],
+            ['g003', 'g012', 'g022', 'g032'], ['g004', 'g013', 'g023', 'g033']],
+    choice: [0, 0, -1, 0],
     oshi: ['M01', 'M02'],
     proposed: ['M03', 'M04', 'M05'],
     completed: true,
     sneakyExtraField: 'this must not appear in the sheet'
   }) } });
   Logger.log('testAppend done -- check the "responses" sheet. ' +
-             'The row should show 3 picks (bad! dropped) and no extra column.');
+             'The row should show 3 picks (bad! dropped), 4 quads in shown, ' +
+             '"0 0 - 0" in choice, and no other extra column.');
 }

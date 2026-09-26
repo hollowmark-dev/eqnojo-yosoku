@@ -202,15 +202,23 @@ function confidence() {
 }
 
 /* ---------- send (silent fail) ---------- */
-function send(done) {
-  if (!CONFIG.endpoint) return;               // unset: do nothing, quietly
-  var body = {
+/* shown/choice are per question, skips included, so they stay aligned:
+ * shown[k] is the 4 faces of question k, choice[k] the position picked
+ * (-1 = skipped). picks keeps its old meaning for the existing sheet. */
+function payload(done) {
+  return {
     ts: new Date().toISOString(),
     picks: answers.map(function (a) { return a.chosen; }),
+    shown: answers.map(function (a) { return a.shown || []; }),
+    choice: answers.map(function (a) { return a.pos; }),
     oshi: oshi.map(function (i) { return MEMBERS[i].id; }),
     proposed: top3.map(function (i) { return MEMBERS[i].id; }),
     completed: !!done
   };
+}
+function send(done) {
+  if (!CONFIG.endpoint) return;               // unset: do nothing, quietly
+  var body = payload(done);
   try {
     fetch(CONFIG.endpoint, {
       method: "POST", mode: "no-cors",
@@ -288,14 +296,18 @@ function nextQ() {
   t0 = Date.now();
 }
 function choose(pos, idx) {
-  answers.push({ q: qi, chosen: POOL[idx[pos]].id,
-                 rt_ms: Date.now() - t0 });
+  answers.push({ q: qi, chosen: POOL[idx[pos]].id, pos: pos,
+                 shown: quadIds(idx), rt_ms: Date.now() - t0 });
   update(idx.map(function (i) { return POOL[i].z; }), pos);
   qi++; nextQ();
 }
 function skipQ() {
-  answers.push({ q: qi, chosen: "", rt_ms: Date.now() - t0 });
+  answers.push({ q: qi, chosen: "", pos: -1,
+                 shown: quadIds(lastQuad), rt_ms: Date.now() - t0 });
   qi++; nextQ();                               // skipped: no likelihood
+}
+function quadIds(idx) {
+  return (idx || []).map(function (i) { return POOL[i].id; });
 }
 function toOshi() {
   show("oshi");
@@ -539,13 +551,7 @@ global.OSHIYOHO = {
   setAnswers: function (a) { answers = a; },
   setOshi: function (o) { oshi = o; },
   setTop3: function (t) { top3 = t; },
-  buildPayload: function (done) {
-    return { ts: new Date().toISOString(),
-             picks: answers.map(function (a) { return a.chosen; }),
-             oshi: oshi.map(function (i) { return MEMBERS[i].id; }),
-             proposed: top3.map(function (i) { return MEMBERS[i].id; }),
-             completed: !!done };
-  },
+  buildPayload: payload,
   /* the real ones, not copies -- the copy drifted once already */
   shareText: shareText, shareUrl: shareUrl, siteUrl: siteUrl, send: send
 };
